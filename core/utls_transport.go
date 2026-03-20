@@ -81,8 +81,16 @@ var _httpClientOnce sync.Once
 // This client automatically respects the configured outbound proxy.
 func GetHttpClient() *http.Client {
 	_httpClientOnce.Do(func() {
+		tr := GetUtlsRoundTripper()
+		if tr == nil {
+			log.Error("utls transport: GetHttpClient called before initialization! Fallback to standard transport.")
+			_httpClient = &http.Client{
+				Timeout: 30 * time.Second,
+			}
+			return
+		}
 		_httpClient = &http.Client{
-			Transport: GetUtlsRoundTripper(),
+			Transport: tr,
 			Timeout:   30 * time.Second,
 		}
 	})
