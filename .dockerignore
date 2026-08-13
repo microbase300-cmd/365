@@ -1,0 +1,19 @@
+# Git files
+.git/
+.gitignore
+
+# Local development files
+.vscode/
+*.exe
+*.log
+*.db
+*.bat
+
+# Secrets
+.env
+
+# Build artifacts
+build/
+
+# Vendor folder (managed by go modules)
+vendor/
